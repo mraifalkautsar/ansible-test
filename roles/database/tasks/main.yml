@@ -1,0 +1,70 @@
+---
+# --- ACL Package (butuh buat PSql user creation) ---
+- name: Install ACL package (required for become_user)
+  ansible.builtin.apt:
+    name: acl
+    state: present
+  become: yes
+
+# --- PostgreSQL Setup ---
+- name: Install PostgreSQL and dependencies
+  ansible.builtin.apt:
+    name: "{{ pg_packages }}"
+    state: present
+
+- name: Find pg_hba.conf path
+  ansible.builtin.find:
+    paths: /etc/postgresql/
+    patterns: 'pg_hba.conf'
+    recurse: yes
+  register: find_pg_hba
+
+- name: Ensure PostgreSQL service is running and enabled
+  ansible.builtin.service:
+    name: postgresql
+    state: started
+    enabled: yes
+
+- name: Configure PostgreSQL to use md5 authentication for local connections
+  ansible.builtin.replace:
+    path: "{{ item.path }}"
+    regexp: '^(local\s+all\s+all\s+)peer$'
+    replace: '\1md5'
+  loop: "{{ find_pg_hba.files }}"
+  notify: Restart postgresql
+  when: find_pg_hba.matched > 0
+
+- name: Flush handlers to apply PostgreSQL changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Create the application database user
+  community.postgresql.postgresql_user:
+    name: "{{ db_user }}"
+    password: "{{ db_password }}"
+    state: present
+  become: yes
+  become_user: postgres
+
+- name: Create the application database
+  community.postgresql.postgresql_db:
+    name: "{{ db_name }}"
+    owner: "{{ db_user }}"
+    state: present
+  become: yes
+  become_user: postgres
+
+- name: Run initial database schema migration
+  ansible.builtin.command:
+    cmd: >
+      psql
+      -d {{ db_name }}
+      -U {{ db_user }}
+      -f {{ app_deploy_dir }}/sql/schema.sql
+  environment:
+    PGPASSWORD: "{{ db_password }}"
+  become: yes
+  become_user: postgres
+  register: schema_migration_result
+  failed_when: >
+    schema_migration_result.rc != 0 and
+    'already exists' not in schema_migration_result.stderr

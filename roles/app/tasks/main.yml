@@ -1,0 +1,55 @@
+---
+# --- Application Deployment (A3) ---
+- name: Create application deployment directory
+  ansible.builtin.file:
+    path: "{{ app_deploy_dir }}"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: '0755'
+  become: yes
+
+- name: Clone Node.js application repository
+  ansible.builtin.git:
+    repo: "{{ app_repo }}"
+    dest: "{{ app_deploy_dir }}"
+    version: "{{ app_repo_version }}"
+    force: yes
+  become: yes
+  become_user: "{{ app_user }}"
+
+- name: Template PM2 ecosystem file
+  ansible.builtin.template:
+    src: ecosystem.config.js.j2
+    dest: "{{ app_deploy_dir }}/ecosystem.config.js"
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: '0644'
+  become: yes
+
+- name: Install Node.js application dependencies
+  community.general.npm:
+    path: "{{ app_deploy_dir }}"
+    production: true
+  become: yes
+  become_user: "{{ app_user }}"
+
+- name: Start or restart application via PM2
+  ansible.builtin.command:
+    cmd: pm2 startOrRestart ecosystem.config.js
+  args:
+    chdir: "{{ app_deploy_dir }}"
+  become: yes
+  become_user: "{{ app_user }}"
+  register: pm2_result
+  changed_when: >
+    'online' in pm2_result.stdout or
+    'restarted' in pm2_result.stdout
+
+
+- name: Save PM2 process list for persistence
+  ansible.builtin.command:
+    cmd: pm2 save
+  become: yes
+  become_user: "{{ app_user }}"
+  changed_when: false
