@@ -1,6 +1,4 @@
----
-# --- Application Deployment (A3) ---
-- name: Create application deployment directory
+- name: Create application directory
   ansible.builtin.file:
     path: "{{ app_deploy_dir }}"
     state: directory
@@ -9,7 +7,7 @@
     mode: '0755'
   become: yes
 
-- name: Clone Node.js application repository
+- name: Clone application repository
   ansible.builtin.git:
     repo: "{{ app_repo }}"
     dest: "{{ app_deploy_dir }}"
@@ -27,29 +25,41 @@
     mode: '0644'
   become: yes
 
-- name: Install Node.js application dependencies
+- name: Install application dependencies
   community.general.npm:
     path: "{{ app_deploy_dir }}"
     production: true
   become: yes
   become_user: "{{ app_user }}"
 
-- name: Start or restart application via PM2
+# =========================
+# PM2 APP START + PERSIST
+# =========================
+
+- name: Start or restart app with PM2
   ansible.builtin.command:
     cmd: pm2 startOrRestart ecosystem.config.js
   args:
     chdir: "{{ app_deploy_dir }}"
   become: yes
   become_user: "{{ app_user }}"
-  register: pm2_result
-  changed_when: >
-    'online' in pm2_result.stdout or
-    'restarted' in pm2_result.stdout
 
-
-- name: Save PM2 process list for persistence
+- name: Save PM2 process list for reboot
   ansible.builtin.command:
     cmd: pm2 save
   become: yes
   become_user: "{{ app_user }}"
-  changed_when: false
+
+# =========================
+# SAFETY CHECK
+# =========================
+
+- name: Verify PM2 dump exists
+  ansible.builtin.stat:
+    path: /home/{{ app_user }}/.pm2/dump.pm2
+  register: pm2_dump
+
+- name: Fail if PM2 will not resurrect on boot
+  ansible.builtin.fail:
+    msg: "PM2 dump.pm2 missing — app WILL NOT start after reboot"
+  when: not pm2_dump.stat.exists
